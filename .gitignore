@@ -1,0 +1,11 @@
+.vscode
+.idea
+
+.mypy_cache
+.venv
+dist
+
+**/__pycache__
+**/*.egg-info
+
+poetry.lock
