@@ -1,6 +1,6 @@
-from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, Callable, Mapping, NoReturn, Optional
+from typing import Any, Mapping, Callable, NoReturn, Optional
+from pathlib import Path
 
 from fastapi import APIRouter
 

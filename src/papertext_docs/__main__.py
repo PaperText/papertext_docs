@@ -1,7 +1,7 @@
 from pathlib import Path
 from subprocess import call
 
-from . import source_path, src_path
+from . import src_path, source_path
 
 pyproject_path = source_path / "pyproject.toml"
 pyproject_path = pyproject_path.resolve()
