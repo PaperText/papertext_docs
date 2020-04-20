@@ -1,3 +1,9 @@
+"""
+    papertext module for managing corpuses/documents
+
+    isort:skip_file
+"""
+
 from pathlib import Path
 from sys import path as sys_path
 
