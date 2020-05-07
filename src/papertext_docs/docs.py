@@ -4,7 +4,7 @@ from pathlib import Path
 
 from fastapi import APIRouter
 
-from paperback import BaseDocs
+from paperback.abc import BaseDocs
 
 
 class DocsImplemented(BaseDocs):
