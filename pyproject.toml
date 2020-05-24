@@ -15,7 +15,7 @@ docs = "papertext_docs:DocsImplemented"
 python = "^3.8"
 
 [tool.poetry.dev-dependencies]
-pyexling = { git = "https://github.com/PaperText/pyexling" }
+pyexling = { git = "git@github.com:PaperText/pyexling.git" }
 pytest = "^5.2"
 flake8 = "^3.7.9"
 flakehell = "^0.3.3"
