@@ -28,7 +28,6 @@ mypy = "^0.770"
 rope = "^0.16.0"
 
 [tool.poetry.extras]
-best=["python"]
 
 [tool.flakehell]
 exclude = ["__pycahce__"]
