@@ -16,18 +16,15 @@ python = "^3.8"
 
 [tool.poetry.dev-dependencies]
 pyexling = { git = "git@github.com:PaperText/pyexling.git" }
-pytest = "^5.2"
+pytest = "^6.0.1"
 flake8 = "^3.7.9"
-flakehell = "^0.3.3"
+flakehell = "^0.5.0"
 flake8-fixme = "^1.1.1"
-flake8-mypy = "^17.8.0"
-pep8-naming = "^0.10.0"
+pep8-naming = "^0.11.1"
 black = "^19.10b0"
-isort = "^4.3.21"
-mypy = "^0.770"
-rope = "^0.16.0"
-
-[tool.poetry.extras]
+isort = "^5.3.2"
+mypy = "^0.782"
+rope = "^0.17.0"
 
 [tool.flakehell]
 exclude = ["__pycahce__"]
@@ -36,7 +33,7 @@ show_source = true
 max_line_length = 79
 
 [tool.flakehell.plugins]
-"flake8-*" = ["+*"]
+"flake8-fixme" = ["+*"]
 "pep8-naming" = ["+*"]
 "mccabe" = ["+*"]
 "pycodestyle" = ["+*"]
