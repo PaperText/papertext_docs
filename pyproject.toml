@@ -5,8 +5,8 @@ description = "standart implementation of docs module for papertext"
 authors = ["Danil Kireev <kireev@isa.ru>"]
 
 [tool.poetry.scripts]
-lint = "papertext_docs.__main__:lint"
-fix = "papertext_docs.__main__:fix"
+fix = "papertext_auth.__main__:Scripts.fix"
+lint = "papertext_auth.__main__:Scripts.lint"
 
 [tool.poetry.plugins."paperback.modules"]
 docs = "papertext_docs:DocsImplemented"
