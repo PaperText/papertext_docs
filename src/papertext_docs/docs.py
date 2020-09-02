@@ -38,7 +38,7 @@ class DocsImplemented(BaseDocs):
         # TODO: add check that connection is working
         #   i.e. try to convert string
 
-    async def create_docs(
+    async def create_doc(
             self,
             doc_id: str,
             parent_corp_id: str,
@@ -50,4 +50,25 @@ class DocsImplemented(BaseDocs):
             created: Optional[datetime] = None,
             tags: Optional[List[str]] = None,
     ):
-        print(self.processor.process("Привет, мир"))
+        xml = self.processor.txt2xml(text)
+
+    async def read_docs(self, contains: Optional[str] = None, author: Optional[str] = None,
+                        created_before: Optional[datetime] = None, created_after: Optional[datetime] = None,
+                        tags: Optional[List[str]] = None):
+        pass
+
+    async def create_corp(
+        self,
+        corp_id: str,
+        name: Optional[str] = None,
+        parent_corp_id: Optional[str] = None,
+        private: bool = False,
+        has_access: Optional[List[str]] = None,
+        to_include=None,
+    ):
+        if to_include is None:
+            to_include = []
+
+    async def read_corps(self, corp_id: str, name: Optional[str] = None, parent_corp_id: Optional[str] = None,
+                         private: bool = False, has_access: Optional[List[str]] = None, to_include=None):
+        pass
