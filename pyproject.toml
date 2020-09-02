@@ -16,6 +16,7 @@ docs = "papertext_docs:DocsImplemented"
 [tool.poetry.dependencies]
 python = "^3.8"
 pyexling = { git = "git@gitlab.com:papertext/pyexling.git" }
+py2neo = "^2020.0.0"
 
 [tool.poetry.dev-dependencies]
 pytest = "^6.0"
