@@ -1,6 +1,5 @@
-from abc import ABC
 from types import SimpleNamespace
-from typing import Any, Dict, List, Callable, ClassVar, Optional
+from typing import Any, Dict, List, Optional
 from datetime import datetime
 from pathlib import Path
 import logging
@@ -11,7 +10,6 @@ from fastapi import APIRouter, HTTPException, status
 from pyexling import PyExLing
 
 from paperback.abc import BaseDocs, BaseAuth
-from paperback.abc.models import UserInfo
 
 
 class DocsImplemented(BaseDocs):
@@ -64,10 +62,13 @@ class DocsImplemented(BaseDocs):
         self.logger.debug("connected to neo4j database")
 
         self.logger.debug("syncing to auth module")
-        self.sync_modules()
+        self.sync_modules_on_startup()
         self.logger.debug("synced to auth module")
 
-    def sync_modules(self):
+    async def __async__init__(self):
+        await self.sync_modules()
+
+    def sync_modules_on_startup(self):
         if len(self.graph_db.schema.get_uniqueness_constraints("org")) == 0:
             self.graph_db.schema.create_uniqueness_constraint("org", "org_id")
         if len(self.graph_db.schema.get_uniqueness_constraints("user")) == 0:
@@ -76,6 +77,60 @@ class DocsImplemented(BaseDocs):
             self.graph_db.schema.create_uniqueness_constraint("corp", "corp_id")
         if len(self.graph_db.schema.get_uniqueness_constraints("doc")) == 0:
             self.graph_db.schema.create_uniqueness_constraint("doc", "doc_id")
+
+    async def sync_modules(self):
+        org_nodes: Dict[str, py2neo.Node] = {}
+        user_nodes: Dict[str, py2neo.Node] = {}
+
+        tx = self.graph_db.begin()
+
+        for org in await self.auth_module.read_orgs():
+            # creating organisation
+            org_node = tx.graph.nodes.match(
+                "org",
+                org_id=org["organisation_id"],
+            ).first()
+            if org_node is None:
+                org_node = py2neo.Node(
+                    "org",
+                    org_id=org["organisation_id"],
+                    org_name=org["organisation_name"],
+                )
+                tx.create(org_node)
+            org_nodes[org["organisation_id"]] = org_node
+
+        for user in await self.auth_module.read_users():
+            # creating user
+            user_node = tx.graph.nodes.match(
+                "user",
+                user_id=user["user_id"],
+            ).first()
+            if user_node is None:
+                user_node = py2neo.Node(
+                    "user",
+                    user_id=user["user_id"],
+                    user_name=user["user_name"],
+                    email=user["email"],
+                    loa=user["level_of_access"],
+                )
+                tx.create(user_node)
+            user_nodes[user["user_id"]] = user_node
+
+            # connect org to user
+            user2org_relation = tx.graph.relationships.match(nodes=[
+                org_nodes[user["member_of"]],
+                user_node,
+            ]).first()
+
+            if user2org_relation is None:
+                user2org_relation = py2neo.Relationship(
+                    org_nodes[user["member_of"]],
+                    "contains",
+                    user_node,
+                )
+                tx.create(user2org_relation)
+
+            tx.commit()
 
     async def create_doc(
             self,
@@ -103,7 +158,8 @@ class DocsImplemented(BaseDocs):
 
     async def create_corp(
         self,
-        issuer: UserInfo,
+        issuer_id: str,
+        issuer_type: str,
         corp_id: str,
         name: Optional[str] = None,
         parent_corp_id: Optional[str] = None,
@@ -114,8 +170,11 @@ class DocsImplemented(BaseDocs):
         if to_include is None:
             to_include = []
 
+        await self.sync_modules()
+
         tx = self.graph_db.begin()
-        corp_with_same_id = self.graph_db.nodes.match("corp", corp_id=corp_id).first()
+
+        corp_with_same_id = tx.graph.nodes.match("corp", corp_id=corp_id).first()
         if corp_with_same_id is not None:
             tx.rollback()
             raise HTTPException(
@@ -136,7 +195,7 @@ class DocsImplemented(BaseDocs):
 
         self.logger.debug("created corpus %s", corpus)
         if parent_corp_id is not None:
-            parent_corpus = self.graph_db.nodes.match(
+            parent_corpus = tx.graph.nodes.match(
                 "corp",
                 corp_id=parent_corp_id,
             ).first()
@@ -150,7 +209,7 @@ class DocsImplemented(BaseDocs):
                     },
                 )
 
-            parent2child_relation = self.graph_db.relationships.match(nodes=[
+            parent2child_relation = tx.graph.relationships.match(nodes=[
                 corpus,
                 parent_corpus,
             ]).first()
@@ -175,10 +234,38 @@ class DocsImplemented(BaseDocs):
                 )
                 tx.create(parent2child)
                 self.logger.debug(f"{parent2child=}")
+        if issuer_type == "user":
+            issuer_node = tx.graph.nodes.match("user", user_id=issuer_id).first()
+        elif issuer_type == "org":
+            issuer_node = tx.graph.nodes.match("org", org_id=issuer_id).first()
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "end": f"issuer with type {issuer_type} not recognized",
+                    "rus": f"создатель с типом {issuer_type} не распознан",
+                },
+            )
+
+        issuer2corpus = py2neo.Relationship(
+            issuer_node,
+            "created",
+            corpus,
+        )
+        tx.create(issuer2corpus)
 
         tx.commit()
         return corpus
 
     async def read_corps(self, corp_id: str, name: Optional[str] = None, parent_corp_id: Optional[str] = None,
                          private: bool = False, has_access: Optional[List[str]] = None, to_include=None):
-        pass
+        return [
+            {
+                "corp_id": "corp_1",
+                "corp_name": "Первый корпус",
+            },
+            {
+                "corp_id": "pushkin_1",
+                "corp_name": "Корпус сочинений Пушкина",
+            },
+        ]
