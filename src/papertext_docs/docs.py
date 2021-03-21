@@ -37,8 +37,10 @@ class DocsImplemented(BaseDocs):
         self.logger.setLevel(logging.getLogger("paperback").level)
         self.logger.info("initializing papertext_docs module")
 
-        self.cfg: SimpleNamespace = cfg
+        self.logger.debug("using storage dir %s", storage_dir)
+        self.logger.debug("using config %s", cfg)
         self.storage_dir: Path = storage_dir
+        self.cfg: SimpleNamespace = cfg
         # TODO: add check for configuration,
         #  i.e. that hash.algo lib and token.curve lib are present
         self.auth_module = auth_module
