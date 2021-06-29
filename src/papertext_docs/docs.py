@@ -1,17 +1,16 @@
-from types import SimpleNamespace
-from typing import Any, Dict, List, Optional
+import logging
+import time
 from datetime import datetime
 from pathlib import Path
-import logging
+from types import SimpleNamespace
+from typing import Any, Dict, List, Optional
 from xml.etree import ElementTree
-import time
+
 import py2neo
-
 from fastapi import APIRouter, HTTPException, status
-from pyexling import PyExLing
-
-from paperback.abc import BaseDocs, BaseAuth
+from paperback.abc import BaseAuth, BaseDocs
 from paperback.abc.models import ReadMinimalCorp
+from pyexling import PyExLing
 
 
 class DocsImplemented(BaseDocs):
@@ -23,10 +22,7 @@ class DocsImplemented(BaseDocs):
             "host": "localhost",
             "port": "7687",
             "scheme": "bolt",
-            "auth": {
-                "user": "neo4j",
-                "password": "",
-            },
+            "auth": {"user": "neo4j", "password": "",},
         },
     }
 
@@ -98,8 +94,7 @@ class DocsImplemented(BaseDocs):
         for org in await self.auth_module.read_orgs():
             # creating organisation
             org_node = tx.graph.nodes.match(
-                "org",
-                org_id=org["organisation_id"],
+                "org", org_id=org["organisation_id"],
             ).first()
             if org_node is None:
                 org_node = py2neo.Node(
@@ -114,8 +109,7 @@ class DocsImplemented(BaseDocs):
         for user in await self.auth_module.read_users():
             # creating user
             user_node = tx.graph.nodes.match(
-                "user",
-                user_id=user["user_id"],
+                "user", user_id=user["user_id"],
             ).first()
             if user_node is None:
                 user_node = py2neo.Node(
@@ -130,17 +124,12 @@ class DocsImplemented(BaseDocs):
 
             # connect org to user
             user2org_relation = tx.graph.relationships.match(
-                nodes=[
-                    org_nodes[user["member_of"]],
-                    user_node,
-                ]
+                nodes=[org_nodes[user["member_of"]], user_node,]
             ).first()
 
             if user2org_relation is None:
                 user2org_relation = py2neo.Relationship(
-                    org_nodes[user["member_of"]],
-                    "contains",
-                    user_node,
+                    org_nodes[user["member_of"]], "contains", user_node,
                 )
                 tx.create(user2org_relation)
 
@@ -242,8 +231,7 @@ class DocsImplemented(BaseDocs):
         self.logger.debug("created corpus %s", corpus)
         if parent_corp_id is not None:
             parent_corpus = tx.graph.nodes.match(
-                "corp",
-                corp_id=parent_corp_id,
+                "corp", corp_id=parent_corp_id,
             ).first()
             if parent_corpus is None:
                 tx.rollback()
@@ -256,10 +244,7 @@ class DocsImplemented(BaseDocs):
                 )
 
             parent2child_relation = tx.graph.relationships.match(
-                nodes=[
-                    corpus,
-                    parent_corpus,
-                ]
+                nodes=[corpus, parent_corpus,]
             ).first()
 
             if parent2child_relation is not None:
@@ -276,9 +261,7 @@ class DocsImplemented(BaseDocs):
             else:
                 self.logger.debug("parent corpus %s", parent_corpus)
                 parent2child = py2neo.Relationship(
-                    parent_corpus,
-                    "contains",
-                    corpus,
+                    parent_corpus, "contains", corpus,
                 )
                 tx.create(parent2child)
                 self.logger.debug(f"{parent2child=}")
@@ -297,11 +280,7 @@ class DocsImplemented(BaseDocs):
                 },
             )
 
-        issuer2corpus = py2neo.Relationship(
-            issuer_node,
-            "created",
-            corpus,
-        )
+        issuer2corpus = py2neo.Relationship(issuer_node, "created", corpus,)
         tx.create(issuer2corpus)
 
         if len(to_include) != 0:
