@@ -26,7 +26,7 @@ docs = "papertext_docs:DocsImplemented"
 [tool.poetry.dependencies]
 python = "^3.8"
 py2neo = "^2021.1.5"
-pyexling = { git = "git@gitlab.com:papertext/pyexling.git" }
+pyexling = {path = "src/pyexling"}
 
 [tool.poetry.dev-dependencies]
 # testing framework

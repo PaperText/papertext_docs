@@ -1,0 +1,3 @@
+[submodule "src/pyexling"]
+	path = src/pyexling
+	url = git@gitlab.com:papertext/pyexling.git
