@@ -18,11 +18,14 @@ class DocsImplemented(BaseDocs):
     requires_auth: bool = True
     DEFAULTS: Dict[str, Any] = {
         "processor": {"host": "", "service": ""},
-        "graph_db": {
+        "db": {
             "host": "localhost",
             "port": "7687",
             "scheme": "bolt",
-            "auth": {"user": "neo4j", "password": "",},
+            "auth": {
+                "username": "neo4j",
+                "password": "password",
+            },
         },
     }
 
@@ -52,11 +55,11 @@ class DocsImplemented(BaseDocs):
 
         self.logger.debug("connecting to neo4j database")
         self.graph_db = py2neo.Graph(
-            host=self.cfg.graph_db.host,
-            port=self.cfg.graph_db.port,
-            scheme=self.cfg.graph_db.scheme,
-            user=self.cfg.graph_db.auth.user,
-            password=self.cfg.graph_db.auth.password,
+            host=self.cfg.db.host,
+            port=self.cfg.db.port,
+            scheme=self.cfg.db.scheme,
+            user=self.cfg.db.auth.username,
+            password=self.cfg.db.auth.password,
         )
         self.logger.debug("connected to neo4j database")
 
@@ -133,7 +136,7 @@ class DocsImplemented(BaseDocs):
                 )
                 tx.create(user2org_relation)
 
-            tx.commit()
+        tx.commit()
 
     async def create_doc(
         self,
