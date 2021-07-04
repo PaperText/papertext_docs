@@ -19,13 +19,11 @@ class DocsImplemented(BaseDocs):
     DEFAULTS: Dict[str, Any] = {
         "processor": {"host": "", "service": ""},
         "db": {
+            "scheme": "bolt",
+            "username": "neo4j",
+            "password": "password",
             "host": "localhost",
             "port": "7687",
-            "scheme": "bolt",
-            "auth": {
-                "username": "neo4j",
-                "password": "password",
-            },
         },
     }
 
@@ -55,11 +53,11 @@ class DocsImplemented(BaseDocs):
 
         self.logger.debug("connecting to neo4j database")
         self.graph_db = py2neo.Graph(
+            scheme=self.cfg.db.scheme,
+            user=self.cfg.db.username,
+            password=self.cfg.db.password,
             host=self.cfg.db.host,
             port=self.cfg.db.port,
-            scheme=self.cfg.db.scheme,
-            user=self.cfg.db.auth.username,
-            password=self.cfg.db.auth.password,
         )
         self.logger.debug("connected to neo4j database")
 
