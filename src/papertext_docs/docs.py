@@ -1,13 +1,17 @@
+from __future__ import annotations
+
 import logging
 import time
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Dict, List, Optional
+from xml.dom import minidom
 from xml.etree import ElementTree
 
 import py2neo
 from fastapi import APIRouter, HTTPException, status
+from paperback.exceptions.docs import CorpusDoesntExist, DocumentNameError
 from paperback.abc import BaseAuth, BaseDocs
 from paperback.abc.models import ReadMinimalCorp
 from pyexling import PyExLing
@@ -17,7 +21,10 @@ class DocsImplemented(BaseDocs):
     requires_dir: bool = True
     requires_auth: bool = True
     DEFAULTS: Dict[str, Any] = {
-        "processor": {"host": "", "service": ""},
+        "processor": {
+            "host": "",
+            "service": "",
+        },
         "db": {
             "scheme": "bolt",
             "username": "neo4j",
@@ -95,7 +102,8 @@ class DocsImplemented(BaseDocs):
         for org in await self.auth_module.read_orgs():
             # creating organisation
             org_node = tx.graph.nodes.match(
-                "org", org_id=org["organisation_id"],
+                "org",
+                org_id=org["organisation_id"],
             ).first()
             if org_node is None:
                 org_node = py2neo.Node(
@@ -110,7 +118,8 @@ class DocsImplemented(BaseDocs):
         for user in await self.auth_module.read_users():
             # creating user
             user_node = tx.graph.nodes.match(
-                "user", user_id=user["user_id"],
+                "user",
+                user_id=user["user_id"],
             ).first()
             if user_node is None:
                 user_node = py2neo.Node(
@@ -125,41 +134,178 @@ class DocsImplemented(BaseDocs):
 
             # connect org to user
             user2org_relation = tx.graph.relationships.match(
-                nodes=[org_nodes[user["member_of"]], user_node,]
+                nodes=[
+                    org_nodes[user["member_of"]],
+                    user_node,
+                ]
             ).first()
 
             if user2org_relation is None:
                 user2org_relation = py2neo.Relationship(
-                    org_nodes[user["member_of"]], "contains", user_node,
+                    org_nodes[user["member_of"]],
+                    "contains",
+                    user_node,
                 )
                 tx.create(user2org_relation)
 
         tx.commit()
+
+    @staticmethod
+    def cleanup_word_attrib(word_attrib: dict[str, Any]) -> dict[str, Any]:
+        res = dict(word_attrib)
+
+        for int_field in [
+            "idx",
+            "dwInfo",
+            "dwId",
+            "ucType",
+            "syntax_parent_idx",
+            "begin_offset",
+            "end_offset",
+        ]:
+            if int_field in res.keys():
+                res[int_field] = int(res[int_field])
+
+        for bool_field in ["bGeo"]:
+            if bool_field in res.keys():
+                res[bool_field] = bool(res[bool_field])
+
+        return res
 
     async def create_doc(
         self,
         creator_id: str,
         creator_type: str,
         doc_id: str,
-        parent_corp_id: str,
         text: str,
         private: bool = False,
+        parent_corp_id: Optional[str] = None,
         name: Optional[str] = None,
         has_access: Optional[List[str]] = None,
         author: Optional[str] = None,
         created: Optional[datetime] = None,
         tags: Optional[List[str]] = None,
-    ):
-        await self.sync_modules()
+    ) -> Dict[str, Any]:
+        tx = self.graph_db.begin()
+
+        docs_with_same_name = tx.graph.nodes.match(
+            "document", corp_id=parent_corp_id
+        ).first()
+
+        if docs_with_same_name is not None:
+            raise DocumentNameError
+
+        if parent_corp_id is not None:
+            parent_corp = tx.graph.nodes.match(
+                "corp", corp_id=parent_corp_id
+            ).first()
+            if parent_corp is None:
+                raise CorpusDoesntExist
 
         start_time = time.time()
-        xml = self.processor.txt2xml(text)
+        xml_document = self.processor.txt2xml(text)
         xml_elapsed_time = time.time() - start_time
         self.logger.debug("analyzing took %s", xml_elapsed_time)
+        # self.logger.debug(
+        # "analyzed text: %s", minidom.parseString(ElementTree.tostring(xml, encoding="unicode")).toprettyxml(indent="\t")
+        # )
 
-        self.logger.debug(
-            "analyzed text: %s", ElementTree.tostring(xml, encoding="utf-8")
+        if creator_type == "user":
+            author = tx.graph.nodes.match(
+                "user", user_id=creator_id
+            ).first()
+
+        doc_node = py2neo.Node(
+            "document",
+            doc_id=doc_id,
+            text=text,
+            private=private,
+            name=name,
+            author=author,
+            created=created,
+            tags=tags,
         )
+        tx.create(doc_node)
+
+        tx.create(py2neo.Relationship(author, "created", doc_node))
+
+        if parent_corp_id is not None:
+            tx.create(py2neo.Relationship(parent_corp, "contains", doc_node))
+
+
+        for sent in xml_document:
+            sent_node = py2neo.Node("sentence", **sent.attrib)
+
+            tx.create(sent_node)
+            tx.create(py2neo.Relationship(doc_node, "contains", sent_node))
+
+            word_idx2word_node: dict[int, ElementTree.Element] = {}
+            clauses = [child for child in sent if child.tag == "clause"]
+            for clause in clauses:
+                clause_node = py2neo.Node("clause", **clause.attrib)
+
+                tx.create(clause_node)
+                tx.create(
+                    py2neo.Relationship(sent_node, "clause_node", clause_node)
+                )
+
+                for word in clause:
+                    word_node = py2neo.Node(
+                        "word",
+                        new=True,
+                        **self.cleanup_word_attrib(word.attrib),
+                    )
+
+                    tx.create(word_node)
+                    tx.create(
+                        py2neo.Relationship(clause_node, "contains", word_node)
+                    )
+
+                    word_idx2word_node[int(word.attrib["idx"])] = word_node
+
+            words = [
+                v
+                for (k, v) in sorted(
+                    word_idx2word_node.items(), key=lambda el: el[0]
+                )
+            ]
+
+            for i in range(len(words) - 1):
+                tx.create(py2neo.Relationship(words[i], "next", words[i + 1]))
+
+            roles = [child for child in sent if child.tag == "role"]
+            for role in roles:
+                role_node = py2neo.Node("role")
+                tx.create(role_node)
+                tx.create(
+                    py2neo.Relationship(
+                        role_node,
+                        "predicate",
+                        word_idx2word_node[int(role.attrib["word_idx"])],
+                    )
+                )
+
+                for arg in role:
+                    tx.create(
+                        py2neo.Relationship(
+                            role_node,
+                            "argument",
+                            word_idx2word_node[int(arg.attrib["word_idx"])],
+                            role_id=int(arg.attrib["role_id"]),
+                        )
+                    )
+        tx.run(
+            """
+            MATCH (s:sentence)-[*2]->(c:word {new:true})
+            WITH c,s
+            MATCH (s:sentence)-[*2]->(p:word {new:true})
+            WHERE c.syntax_parent_idx = p.idx
+            CREATE (p)-[:syntax_link{link_name:c.syntax_link_name}]->(c)
+            SET c.new = false, p.new = false
+            """
+        )
+        tx.run("MATCH (w:word) REMOVE w.new")
+        tx.commit()
 
     async def read_docs(
         self,
@@ -207,8 +353,6 @@ class DocsImplemented(BaseDocs):
         if to_include is None:
             to_include = []
 
-        await self.sync_modules()
-
         tx = self.graph_db.begin()
 
         corp_with_same_id = tx.graph.nodes.match(
@@ -232,7 +376,8 @@ class DocsImplemented(BaseDocs):
         self.logger.debug("created corpus %s", corpus)
         if parent_corp_id is not None:
             parent_corpus = tx.graph.nodes.match(
-                "corp", corp_id=parent_corp_id,
+                "corp",
+                corp_id=parent_corp_id,
             ).first()
             if parent_corpus is None:
                 tx.rollback()
@@ -245,7 +390,10 @@ class DocsImplemented(BaseDocs):
                 )
 
             parent2child_relation = tx.graph.relationships.match(
-                nodes=[corpus, parent_corpus,]
+                nodes=[
+                    corpus,
+                    parent_corpus,
+                ]
             ).first()
 
             if parent2child_relation is not None:
@@ -262,7 +410,9 @@ class DocsImplemented(BaseDocs):
             else:
                 self.logger.debug("parent corpus %s", parent_corpus)
                 parent2child = py2neo.Relationship(
-                    parent_corpus, "contains", corpus,
+                    parent_corpus,
+                    "contains",
+                    corpus,
                 )
                 tx.create(parent2child)
                 self.logger.debug(f"{parent2child=}")
@@ -281,7 +431,11 @@ class DocsImplemented(BaseDocs):
                 },
             )
 
-        issuer2corpus = py2neo.Relationship(issuer_node, "created", corpus,)
+        issuer2corpus = py2neo.Relationship(
+            issuer_node,
+            "created",
+            corpus,
+        )
         tx.create(issuer2corpus)
 
         if len(to_include) != 0:
