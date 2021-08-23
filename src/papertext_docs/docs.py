@@ -16,6 +16,8 @@ from paperback.abc import BaseAuth, BaseDocs
 from paperback.abc.models import ReadMinimalCorp
 from pyexling import PyExLing
 
+from papertext_docs.tasks import add_document
+
 
 class DocsImplemented(BaseDocs):
     requires_dir: bool = True
@@ -186,6 +188,9 @@ class DocsImplemented(BaseDocs):
         created: Optional[datetime] = None,
         tags: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
+
+        add_document(text)
+
         tx = self.graph_db.begin()
 
         docs_with_same_name = tx.graph.nodes.match(
