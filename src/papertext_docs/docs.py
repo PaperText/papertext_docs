@@ -11,9 +11,12 @@ from xml.etree import ElementTree
 
 import py2neo
 from fastapi import APIRouter, HTTPException, status
+
+from paperback.exceptions import PaperBackError
 from paperback.exceptions.docs import CorpusDoesntExist, DocumentNameError
 from paperback.abc import BaseAuth, BaseDocs
 from paperback.abc.models import ReadMinimalCorp
+
 from pyexling import PyExLing
 
 from papertext_docs.tasks import add_document
@@ -69,6 +72,23 @@ class DocsImplemented(BaseDocs):
             port=self.cfg.db.port,
         )
         self.logger.debug("connected to neo4j database")
+
+        self.logger.debug("creating default corpus")
+        self.root_corp = self.graph_db.nodes.match(
+            "corp", corp_id="root"
+        ).first()
+        if self.root_corp is None:
+            tx = self.graph_db.begin()
+            self.root_corp = py2neo.Node(
+                "corp", corp_id="root"
+            )
+            tx.create(
+                self.root_corp
+            )
+            tx.commit()
+            self.logger.debug("created default root corpus")
+        else:
+            self.logger.debug("using already existing root corpus")
 
         self.logger.debug("syncing with auth module")
         self.sync_modules_on_startup()
@@ -189,7 +209,7 @@ class DocsImplemented(BaseDocs):
         tags: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
 
-        add_document(text)
+        # add_document(text)
 
         tx = self.graph_db.begin()
 
@@ -206,6 +226,9 @@ class DocsImplemented(BaseDocs):
             ).first()
             if parent_corp is None:
                 raise CorpusDoesntExist
+        else:
+            parent_corp = self.root_corp
+            parent_corp_id = self.root_corp["corp_id"]
 
         start_time = time.time()
         xml_document = self.processor.txt2xml(text)
@@ -219,14 +242,16 @@ class DocsImplemented(BaseDocs):
             author = tx.graph.nodes.match(
                 "user", user_id=creator_id
             ).first()
+            self.logger.debug("selected user: %s", author)
 
         doc_node = py2neo.Node(
             "document",
             doc_id=doc_id,
+            parent_corp_id=parent_corp_id,
             text=text,
             private=private,
             name=name,
-            author=author,
+            author=author["user_id"],
             created=created,
             tags=tags,
         )
@@ -314,13 +339,55 @@ class DocsImplemented(BaseDocs):
 
     async def read_docs(
         self,
+        requester_id: str,
         contains: Optional[str] = None,
         author: Optional[str] = None,
         created_before: Optional[datetime] = None,
         created_after: Optional[datetime] = None,
         tags: Optional[List[str]] = None,
-    ):
-        pass
+    ) -> List[Dict[str, Any]]:
+        self.logger.debug("reading documents")
+
+        if contains is not None:
+            raise PaperBackError(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="option `contains` is currently unsupported"
+            )
+        elif author is not None:
+            raise PaperBackError(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="option `author` is currently unsupported"
+            )
+        elif created_before is not None:
+            raise PaperBackError(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="option `created_before` is currently unsupported"
+            )
+        elif created_after is not None:
+            raise PaperBackError(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="option `created_after` is currently unsupported"
+            )
+        elif tags is not None:
+            raise PaperBackError(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="option `tags` is currently unsupported"
+            )
+        # graph = init_graph(config)
+        # if only_inactive:
+        #     query = "MATCH (d:document {inactive : false}) RETURN id(d) as doc_id, d.name as name"
+        # else:
+        #     query = "MATCH (d:document {inactive : true}) RETURN id(d) as doc_id, d.name as name"
+        #
+        # result = graph.run(query).data()
+        #
+        # return {'documents': result}
+
+        tx = self.graph_db.begin()
+        docs: list[py2neo.Node] = tx.graph.nodes.match("document")
+        self.logger.debug("read documents: %s", list(docs))
+        self.logger.info("read documents")
+        return [dict(d) for d in docs]
 
     async def read_doc(self, doc_id: str) -> Dict[str, Any]:
         pass
