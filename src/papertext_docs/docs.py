@@ -3,33 +3,32 @@ from __future__ import annotations
 import logging
 import time
 from datetime import datetime
+from enum import Enum
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Dict, List, Optional
-from xml.dom import minidom
-from xml.etree import ElementTree
 
 import py2neo
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, status, Depends
 
+from paperback.abc import BaseAuth, BaseDocs
+from paperback.abc.models import ReadMinimalCorp, CreateDoc, TokenTester, UserInfo
 from paperback.exceptions import PaperBackError
 from paperback.exceptions.docs import CorpusDoesntExist, DocumentNameError
-from paperback.abc import BaseAuth, BaseDocs
-from paperback.abc.models import ReadMinimalCorp
-
-from pyexling import PyExLing
-
+from papertext_docs.abc import Analyzer
+from papertext_docs.analyzers import PyExLingWrapper, TitanisWrapper
 from papertext_docs.tasks import add_document
+
+
+class AnalyzerEnum(str, Enum):
+    pyexling = "pyexling"
+    titanis_open = "titanis_open"
 
 
 class DocsImplemented(BaseDocs):
     requires_dir: bool = True
     requires_auth: bool = True
     DEFAULTS: Dict[str, Any] = {
-        "processor": {
-            "host": "",
-            "service": "",
-        },
         "db": {
             "scheme": "bolt",
             "username": "neo4j",
@@ -37,11 +36,18 @@ class DocsImplemented(BaseDocs):
             "host": "localhost",
             "port": "7687",
         },
+        "analyzers": {
+            "titanis": {
+                "host": "",
+            },
+            "pyexling": {
+                "host": "",
+                "service": "",
+            },
+        },
     }
 
-    def __init__(
-        self, cfg: SimpleNamespace, storage_dir: Path, auth_module: BaseAuth
-    ):
+    def __init__(self, cfg: SimpleNamespace, storage_dir: Path, auth_module: BaseAuth):
         self.logger = logging.getLogger(__name__)
         self.logger.setLevel(logging.getLogger("paperback").level)
         self.logger.info("initializing papertext_docs module")
@@ -57,12 +63,6 @@ class DocsImplemented(BaseDocs):
         self.docs_backup_folder = self.storage_dir / "docs.bak"
         self.docs_backup_folder.mkdir(parents=True, exist_ok=True)
 
-        self.logger.debug("connecting to pyexling")
-        self.processor = PyExLing(cfg.processor.host, cfg.processor.service)
-        # TODO: add check that connection is working
-        #   i.e. try to convert string
-        self.logger.debug("connected to pyexling")
-
         self.logger.debug("connecting to neo4j database")
         self.graph_db = py2neo.Graph(
             scheme=self.cfg.db.scheme,
@@ -74,17 +74,11 @@ class DocsImplemented(BaseDocs):
         self.logger.debug("connected to neo4j database")
 
         self.logger.debug("creating default corpus")
-        self.root_corp = self.graph_db.nodes.match(
-            "corp", corp_id="root"
-        ).first()
+        self.root_corp = self.graph_db.nodes.match("corp", corp_id="root").first()
         if self.root_corp is None:
             tx = self.graph_db.begin()
-            self.root_corp = py2neo.Node(
-                "corp", corp_id="root"
-            )
-            tx.create(
-                self.root_corp
-            )
+            self.root_corp = py2neo.Node("corp", corp_id="root")
+            tx.create(self.root_corp)
             tx.commit()
             self.logger.debug("created default root corpus")
         else:
@@ -94,6 +88,18 @@ class DocsImplemented(BaseDocs):
         self.sync_modules_on_startup()
         self.logger.debug("synced with auth module")
 
+        self.logger.debug("loading analyzers")
+        self.analyzers: Dict[AnalyzerEnum, Analyzer] = {
+            AnalyzerEnum.pyexling: PyExLingWrapper(
+                cfg.analyzers.pyexling.host, cfg.analyzers.pyexling.sercive
+            ),
+            AnalyzerEnum.titanis_open: TitanisWrapper(cfg.analyzers.titanis.host),
+        }
+        self.logger.debug("loaded analyzers")
+
+    def get_analyzers(self):
+        return AnalyzerEnum
+
     async def __async__init__(self):
         await self.sync_modules()
         self.set_constraints()
@@ -102,13 +108,9 @@ class DocsImplemented(BaseDocs):
         if len(self.graph_db.schema.get_uniqueness_constraints("org")) == 0:
             self.graph_db.schema.create_uniqueness_constraint("org", "org_id")
         if len(self.graph_db.schema.get_uniqueness_constraints("user")) == 0:
-            self.graph_db.schema.create_uniqueness_constraint(
-                "user", "user_id"
-            )
+            self.graph_db.schema.create_uniqueness_constraint("user", "user_id")
         if len(self.graph_db.schema.get_uniqueness_constraints("corp")) == 0:
-            self.graph_db.schema.create_uniqueness_constraint(
-                "corp", "corp_id"
-            )
+            self.graph_db.schema.create_uniqueness_constraint("corp", "corp_id")
         if len(self.graph_db.schema.get_uniqueness_constraints("doc")) == 0:
             self.graph_db.schema.create_uniqueness_constraint("doc", "doc_id")
 
@@ -172,34 +174,13 @@ class DocsImplemented(BaseDocs):
 
         tx.commit()
 
-    @staticmethod
-    def cleanup_word_attrib(word_attrib: dict[str, Any]) -> dict[str, Any]:
-        res = dict(word_attrib)
-
-        for int_field in [
-            "idx",
-            "dwInfo",
-            "dwId",
-            "ucType",
-            "syntax_parent_idx",
-            "begin_offset",
-            "end_offset",
-        ]:
-            if int_field in res.keys():
-                res[int_field] = int(res[int_field])
-
-        for bool_field in ["bGeo"]:
-            if bool_field in res.keys():
-                res[bool_field] = bool(res[bool_field])
-
-        return res
-
     async def create_doc(
         self,
         creator_id: str,
         creator_type: str,
         doc_id: str,
         text: str,
+        analyzer_id: Optional[str],
         private: bool = False,
         parent_corp_id: Optional[str] = None,
         name: Optional[str] = None,
@@ -208,6 +189,9 @@ class DocsImplemented(BaseDocs):
         created: Optional[datetime] = None,
         tags: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
+
+        if analyzer_id is None:
+            analyzer_id = "titanis_open"
 
         # add_document(text)
 
@@ -221,121 +205,12 @@ class DocsImplemented(BaseDocs):
             raise DocumentNameError
 
         if parent_corp_id is not None:
-            parent_corp = tx.graph.nodes.match(
-                "corp", corp_id=parent_corp_id
-            ).first()
+            parent_corp = tx.graph.nodes.match("corp", corp_id=parent_corp_id).first()
             if parent_corp is None:
                 raise CorpusDoesntExist
         else:
             parent_corp = self.root_corp
             parent_corp_id = self.root_corp["corp_id"]
-
-        start_time = time.time()
-        xml_document = self.processor.txt2xml(text)
-        xml_elapsed_time = time.time() - start_time
-        self.logger.debug("analyzing took %s", xml_elapsed_time)
-        # self.logger.debug(
-        # "analyzed text: %s", minidom.parseString(ElementTree.tostring(xml, encoding="unicode")).toprettyxml(indent="\t")
-        # )
-
-        if creator_type == "user":
-            author = tx.graph.nodes.match(
-                "user", user_id=creator_id
-            ).first()
-            self.logger.debug("selected user: %s", author)
-
-        doc_node = py2neo.Node(
-            "document",
-            doc_id=doc_id,
-            parent_corp_id=parent_corp_id,
-            text=text,
-            private=private,
-            name=name,
-            author=author["user_id"],
-            created=created,
-            tags=tags,
-        )
-        tx.create(doc_node)
-
-        tx.create(py2neo.Relationship(author, "created", doc_node))
-
-        if parent_corp_id is not None:
-            tx.create(py2neo.Relationship(parent_corp, "contains", doc_node))
-
-
-        for sent in xml_document:
-            sent_node = py2neo.Node("sentence", **sent.attrib)
-
-            tx.create(sent_node)
-            tx.create(py2neo.Relationship(doc_node, "contains", sent_node))
-
-            word_idx2word_node: dict[int, ElementTree.Element] = {}
-            clauses = [child for child in sent if child.tag == "clause"]
-            for clause in clauses:
-                clause_node = py2neo.Node("clause", **clause.attrib)
-
-                tx.create(clause_node)
-                tx.create(
-                    py2neo.Relationship(sent_node, "clause_node", clause_node)
-                )
-
-                for word in clause:
-                    word_node = py2neo.Node(
-                        "word",
-                        new=True,
-                        **self.cleanup_word_attrib(word.attrib),
-                    )
-
-                    tx.create(word_node)
-                    tx.create(
-                        py2neo.Relationship(clause_node, "contains", word_node)
-                    )
-
-                    word_idx2word_node[int(word.attrib["idx"])] = word_node
-
-            words = [
-                v
-                for (k, v) in sorted(
-                    word_idx2word_node.items(), key=lambda el: el[0]
-                )
-            ]
-
-            for i in range(len(words) - 1):
-                tx.create(py2neo.Relationship(words[i], "next", words[i + 1]))
-
-            roles = [child for child in sent if child.tag == "role"]
-            for role in roles:
-                role_node = py2neo.Node("role")
-                tx.create(role_node)
-                tx.create(
-                    py2neo.Relationship(
-                        role_node,
-                        "predicate",
-                        word_idx2word_node[int(role.attrib["word_idx"])],
-                    )
-                )
-
-                for arg in role:
-                    tx.create(
-                        py2neo.Relationship(
-                            role_node,
-                            "argument",
-                            word_idx2word_node[int(arg.attrib["word_idx"])],
-                            role_id=int(arg.attrib["role_id"]),
-                        )
-                    )
-        tx.run(
-            """
-            MATCH (s:sentence)-[*2]->(c:word {new:true})
-            WITH c,s
-            MATCH (s:sentence)-[*2]->(p:word {new:true})
-            WHERE c.syntax_parent_idx = p.idx
-            CREATE (p)-[:syntax_link{link_name:c.syntax_link_name}]->(c)
-            SET c.new = false, p.new = false
-            """
-        )
-        tx.run("MATCH (w:word) REMOVE w.new")
-        tx.commit()
 
     async def read_docs(
         self,
@@ -351,27 +226,27 @@ class DocsImplemented(BaseDocs):
         if contains is not None:
             raise PaperBackError(
                 status_code=status.HTTP_409_CONFLICT,
-                detail="option `contains` is currently unsupported"
+                detail="option `contains` is currently unsupported",
             )
         elif author is not None:
             raise PaperBackError(
                 status_code=status.HTTP_409_CONFLICT,
-                detail="option `author` is currently unsupported"
+                detail="option `author` is currently unsupported",
             )
         elif created_before is not None:
             raise PaperBackError(
                 status_code=status.HTTP_409_CONFLICT,
-                detail="option `created_before` is currently unsupported"
+                detail="option `created_before` is currently unsupported",
             )
         elif created_after is not None:
             raise PaperBackError(
                 status_code=status.HTTP_409_CONFLICT,
-                detail="option `created_after` is currently unsupported"
+                detail="option `created_after` is currently unsupported",
             )
         elif tags is not None:
             raise PaperBackError(
                 status_code=status.HTTP_409_CONFLICT,
-                detail="option `tags` is currently unsupported"
+                detail="option `tags` is currently unsupported",
             )
         # graph = init_graph(config)
         # if only_inactive:
@@ -427,9 +302,7 @@ class DocsImplemented(BaseDocs):
 
         tx = self.graph_db.begin()
 
-        corp_with_same_id = tx.graph.nodes.match(
-            "corp", corp_id=corp_id
-        ).first()
+        corp_with_same_id = tx.graph.nodes.match("corp", corp_id=corp_id).first()
         if corp_with_same_id is not None:
             tx.rollback()
             raise HTTPException(
@@ -440,9 +313,7 @@ class DocsImplemented(BaseDocs):
                 },
             )
         else:
-            corpus = py2neo.Node(
-                "corp", corp_id=corp_id, name=name, private=private
-            )
+            corpus = py2neo.Node("corp", corp_id=corp_id, name=name, private=private)
             tx.create(corpus)
 
         self.logger.debug("created corpus %s", corpus)
@@ -489,9 +360,7 @@ class DocsImplemented(BaseDocs):
                 tx.create(parent2child)
                 self.logger.debug(f"{parent2child=}")
         if issuer_type == "user":
-            issuer_node = tx.graph.nodes.match(
-                "user", user_id=issuer_id
-            ).first()
+            issuer_node = tx.graph.nodes.match("user", user_id=issuer_id).first()
         elif issuer_type == "org":
             issuer_node = tx.graph.nodes.match("org", org_id=issuer_id).first()
         else:
@@ -532,9 +401,7 @@ class DocsImplemented(BaseDocs):
     ):
         return [
             ReadMinimalCorp(corp_id="corp_1", name="Первый корпус"),
-            ReadMinimalCorp(
-                corp_id="pushkin_1", name="Корпус сочинений Пушкина"
-            ),
+            ReadMinimalCorp(corp_id="pushkin_1", name="Корпус сочинений Пушкина"),
         ]
 
     async def read_corp(self, corp_id: str) -> Dict[str, Any]:
@@ -553,3 +420,18 @@ class DocsImplemented(BaseDocs):
 
     async def delete_corp(self, corp_id: str):
         pass
+
+    def add_routes(self, router: APIRouter, token_tester: TokenTester):
+        # router.routes.pop([r for r in router.routes if r.path=="/docs"][0])
+
+        @router.post("/docs", tags=["docs_module", "docs"])
+        async def create_doc(
+            doc: CreateDoc[AnalyzerEnum],
+            requester: UserInfo = Depends(token_tester(greater_or_equal=0)),
+        ):
+            """
+            creates document with given id if it's not occupied
+            """
+            return await self.create_doc(
+                creator_id=requester.user_id, creator_type="user", **dict(doc)
+            )
