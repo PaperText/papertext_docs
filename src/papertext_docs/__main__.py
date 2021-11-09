@@ -44,9 +44,7 @@ class Scripts:
     @staticmethod
     def fix_black():
         Scripts.pretty_print("black fixer")
-        Scripts.execute(
-            f"python -m black {src_path} --config {pyproject_path}"
-        )
+        Scripts.execute(f"python -m black {src_path} --config {pyproject_path}")
 
     @staticmethod
     def fix_isort():

@@ -9,7 +9,7 @@ default_info = {
     "password": "12345",
     "host": "localhost",
     "port": "5672",
-    "vhost": ""
+    "vhost": "",
 }
 info = {}
 
